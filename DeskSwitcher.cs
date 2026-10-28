@@ -41,7 +41,7 @@ class TrayApp : ApplicationContext
         public uint type;
         public KEYBDINPUT ki;
     }
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Size = 32)]
     struct KEYBDINPUT
     {
         public ushort wVk;
