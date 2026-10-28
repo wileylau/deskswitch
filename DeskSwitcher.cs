@@ -68,6 +68,7 @@ class TrayApp : ApplicationContext
     [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string lpModuleName);
     private const int WH_MOUSE_LL = 14;
     private const int WM_LBUTTONDOWN = 0x0201;
@@ -140,7 +141,7 @@ class TrayApp : ApplicationContext
             string name = GetDesktopName(d, i);
             string topTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
                 ? info.Titles[0] : "(empty)";
-            if (topTitle.Length > 45) topTitle = topTitle.Substring(0, 42) + "...";
+            if (topTitle.Length > 55) topTitle = topTitle.Substring(0, 52) + "...";
             if (name.Length > 28) name = name.Substring(0, 25) + "...";
 
             items.Add(new DesktopRowData
@@ -189,10 +190,22 @@ class TrayApp : ApplicationContext
         int w = menuForm.Width;
         int h = menuForm.Height;
         int x = location.X;
-        int y = location.Y;
+        int y;
+        if (location.Y >= screen.WorkingArea.Bottom - (int)(40 * (menuForm.DeviceDpi / 96f)))
+        {
+            y = screen.WorkingArea.Bottom - h;
+        }
+        else if (location.Y <= screen.WorkingArea.Top + (int)(40 * (menuForm.DeviceDpi / 96f)))
+        {
+            y = screen.WorkingArea.Top;
+        }
+        else
+        {
+            y = location.Y - h;
+        }
         if (x + w > screen.WorkingArea.Right) x = screen.WorkingArea.Right - w;
-        if (y + h > screen.WorkingArea.Bottom) y = screen.WorkingArea.Bottom - h;
         if (x < screen.WorkingArea.Left) x = screen.WorkingArea.Left;
+        if (y + h > screen.WorkingArea.Bottom) y = screen.WorkingArea.Bottom - h;
         if (y < screen.WorkingArea.Top) y = screen.WorkingArea.Top;
         menuForm.Location = new Point(x, y);
 
@@ -488,6 +501,7 @@ class DesktopMenuForm : Form
     private Color sepColor;
     private Color accentColor;
     private string fontName;
+    private float dpiScale = 1f;
     private int padding = 8;
 
     private readonly List<Panel> rows = new List<Panel>();
@@ -506,19 +520,19 @@ class DesktopMenuForm : Form
 
         if (dark)
         {
-            bgColor = Color.FromArgb(32, 32, 32);
-            hoverColor = Color.FromArgb(55, 55, 55);
-            textColor = Color.FromArgb(240, 240, 240);
-            secondaryColor = Color.FromArgb(160, 160, 160);
+            bgColor = Color.FromArgb(31, 31, 31);
+            hoverColor = Color.FromArgb(45, 45, 45);
+            textColor = Color.FromArgb(255, 255, 255);
+            secondaryColor = Color.FromArgb(153, 153, 153);
             sepColor = Color.FromArgb(60, 60, 60);
         }
         else
         {
-            bgColor = Color.FromArgb(249, 249, 249);
-            hoverColor = Color.FromArgb(230, 230, 230);
-            textColor = Color.FromArgb(20, 20, 20);
-            secondaryColor = Color.FromArgb(90, 90, 90);
-            sepColor = Color.FromArgb(220, 220, 220);
+            bgColor = Color.White;
+            hoverColor = Color.FromArgb(237, 237, 237);
+            textColor = Color.FromArgb(0, 0, 0);
+            secondaryColor = Color.FromArgb(96, 96, 96);
+            sepColor = Color.FromArgb(224, 224, 224);
         }
         accentColor = TrayApp.GetAccentColor();
 
@@ -528,7 +542,9 @@ class DesktopMenuForm : Form
         TopMost = true;
         DoubleBuffered = true;
         BackColor = bgColor;
-        ClientSize = new Size(320, 120);
+        dpiScale = DeviceDpi / 96f;
+        padding = (int)(8 * dpiScale);
+        ClientSize = new Size((int)(380 * dpiScale), (int)(120 * dpiScale));
 
         HandleCreated += (s, e) => ApplyDwm();
         Resize += (s, e) => ApplyRegion();
@@ -621,7 +637,7 @@ class DesktopMenuForm : Form
 
         separator = new Panel { Height = 1, Width = rowWidth, Location = new Point(padding, y + 2), BackColor = sepColor };
         Controls.Add(separator);
-        y += separator.Height + 6;
+        y += separator.Height + (int)(6 * dpiScale);
 
         exitRow = CreateExitRow(rowWidth);
         exitRow.Location = new Point(padding, y);
@@ -634,7 +650,8 @@ class DesktopMenuForm : Form
 
     private Panel CreateRow(TrayApp.DesktopRowData data, int width)
     {
-        var row = new Panel { Height = 52, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        int rowH = (int)(52 * dpiScale);
+        var row = new Panel { Height = rowH, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
         try
         {
             using (var path = new GraphicsPath())
@@ -642,8 +659,8 @@ class DesktopMenuForm : Form
                 int r = 4;
                 path.AddArc(0, 0, r * 2, r * 2, 180, 90);
                 path.AddArc(width - r * 2, 0, r * 2, r * 2, 270, 90);
-                path.AddArc(width - r * 2, 52 - r * 2, r * 2, r * 2, 0, 90);
-                path.AddArc(0, 52 - r * 2, r * 2, r * 2, 90, 90);
+                path.AddArc(width - r * 2, rowH - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(0, rowH - r * 2, r * 2, r * 2, 90, 90);
                 path.CloseFigure();
                 row.Region = new Region(path);
             }
@@ -652,7 +669,7 @@ class DesktopMenuForm : Form
 
         if (data.IsCurrent)
         {
-            var bar = new Panel { Width = 3, Height = 20, Location = new Point(4, 16), BackColor = accentColor };
+            var bar = new Panel { Width = (int)(3 * dpiScale), Height = (int)(20 * dpiScale), Location = new Point((int)(4 * dpiScale), (int)(16 * dpiScale)), BackColor = accentColor };
             row.Controls.Add(bar);
         }
 
@@ -661,7 +678,7 @@ class DesktopMenuForm : Form
             Text = data.Name,
             Font = new Font(fontName, 10.5f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = textColor,
-            Location = new Point(16, 8),
+            Location = new Point((int)(16 * dpiScale), (int)(8 * dpiScale)),
             AutoSize = true,
             BackColor = Color.Transparent
         };
@@ -672,7 +689,7 @@ class DesktopMenuForm : Form
             Text = data.TopTitle,
             Font = new Font(fontName, 9f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = secondaryColor,
-            Location = new Point(16, 30),
+            Location = new Point((int)(16 * dpiScale), (int)(28 * dpiScale)),
             AutoSize = true,
             BackColor = Color.Transparent
         };
@@ -708,7 +725,8 @@ class DesktopMenuForm : Form
 
     private Panel CreateExitRow(int width)
     {
-        var row = new Panel { Height = 36, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        int exitH = (int)(36 * dpiScale);
+        var row = new Panel { Height = exitH, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
         try
         {
             using (var path = new GraphicsPath())
@@ -716,8 +734,8 @@ class DesktopMenuForm : Form
                 int r = 4;
                 path.AddArc(0, 0, r * 2, r * 2, 180, 90);
                 path.AddArc(width - r * 2, 0, r * 2, r * 2, 270, 90);
-                path.AddArc(width - r * 2, 36 - r * 2, r * 2, r * 2, 0, 90);
-                path.AddArc(0, 36 - r * 2, r * 2, r * 2, 90, 90);
+                path.AddArc(width - r * 2, exitH - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(0, exitH - r * 2, r * 2, r * 2, 90, 90);
                 path.CloseFigure();
                 row.Region = new Region(path);
             }
@@ -728,7 +746,7 @@ class DesktopMenuForm : Form
             Text = "Exit",
             Font = new Font(fontName, 10.5f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = textColor,
-            Location = new Point(16, 8),
+            Location = new Point((int)(16 * dpiScale), (int)(8 * dpiScale)),
             AutoSize = true,
             BackColor = Color.Transparent
         };
@@ -765,6 +783,7 @@ static class Program
     [STAThread]
     static void Main()
     {
+        try { TrayApp.SetProcessDPIAware(); } catch { }
         const string mutexName = "Local\\DeskSwitcherSingleInstance";
         bool createdNew;
         System.Threading.Mutex mutex = new System.Threading.Mutex(true, mutexName, out createdNew);
