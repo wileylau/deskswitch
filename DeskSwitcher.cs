@@ -67,6 +67,8 @@ class TrayApp : ApplicationContext
     public TrayApp()
     {
         var menu = new ContextMenuStrip();
+        menu.AutoClose = true;
+        menu.LostFocus += (s, e) => { if (menu.Visible) menu.Close(); };
         menu.Items.Add("Exit", null, (s, e) => ExitThread());
 
         tray = new NotifyIcon
@@ -79,7 +81,10 @@ class TrayApp : ApplicationContext
         {
             RebuildMenu();
             if (e.Button == MouseButtons.Left)
+            {
                 tray.ContextMenuStrip.Show(Cursor.Position);
+                tray.ContextMenuStrip.Focus();
+            }
         };
 
         timer = new Timer { Interval = 1000 };
