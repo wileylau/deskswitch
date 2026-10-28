@@ -131,11 +131,12 @@ class TrayApp : ApplicationContext
             DesktopInfo info = null;
             foreach (var di in infos) if (di.Id == d) { info = di; break; }
 
+            string name = GetDesktopName(d, i);
             string topTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
                 ? info.Titles[0] : "(empty)";
             if (topTitle.Length > 45) topTitle = topTitle.Substring(0, 42) + "...";
 
-            string text = "Desktop " + (i + 1) + (d == cur ? "  (current)" : "") + "  -  " + topTitle;
+            string text = name + (d == cur ? "  (current)" : "") + "  -  " + topTitle;
             var item = new ToolStripMenuItem(text);
             int targetIndex = i;
             item.Click += (s, e) => { tray.ContextMenuStrip.Close(); SwitchToDesktop(targetIndex); };
@@ -214,6 +215,24 @@ class TrayApp : ApplicationContext
             }
         }
         return CallNextHookEx(mouseHookHandle, nCode, wParam, lParam);
+    }
+
+    private static string GetDesktopName(Guid id, int index)
+    {
+        try
+        {
+            string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops\Desktops\{" + id.ToString().ToUpperInvariant() + "}";
+            using (var key = Registry.CurrentUser.OpenSubKey(keyPath))
+            {
+                if (key != null)
+                {
+                    var name = key.GetValue("Name") as string;
+                    if (!string.IsNullOrWhiteSpace(name)) return name;
+                }
+            }
+        }
+        catch { }
+        return "Desktop " + (index + 1);
     }
 
     private void RefreshCurrent()

@@ -13,7 +13,7 @@ Windows tray app showing the current virtual desktop number; left-click lists de
 ## Architecture notes
 
 - Single source file: `DeskSwitcher.cs`.
-- Desktop list/current index come from registry: `HKCU\...\Explorer\VirtualDesktops` (`VirtualDesktopIDs`, `CurrentVirtualDesktop`), 16 bytes per GUID.
+- Desktop list/current index come from registry: `HKCU\...\Explorer\VirtualDesktops` (`VirtualDesktopIDs`, `CurrentVirtualDesktop`), 16 bytes per GUID. Desktop display names are read from `...\VirtualDesktops\Desktops\{GUID}\Name` when present.
 - Window-to-desktop mapping uses COM `IVirtualDesktopManager.GetWindowDesktopId`.
 - Switching uses `SendInput` with Ctrl+Win+Arrow, repeated for adjacent steps. `KEYBDINPUT` must be declared with `Size = 32` so `INPUT` is 40 bytes on x64; otherwise `SendInput` returns 0 and silently fails.
 - Left-click shows a `ContextMenuStrip` at the cursor; right-click shows the same menu automatically.
