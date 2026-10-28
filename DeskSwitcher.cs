@@ -377,23 +377,12 @@ class TrayApp : ApplicationContext
 
         if (idx == lastDesktop && label == lastIconLabel) 
         {
-            // still refresh visible menu
-            if (menuForm != null && menuForm.Visible)
-            {
-                var items = BuildItems();
-                menuForm.Populate(items);
-            }
             return;
         }
         lastDesktop = idx;
         lastIconLabel = label;
         tray.Icon = MakeIcon(label);
         tray.Text = tooltip;
-        if (menuForm != null && menuForm.Visible)
-        {
-            var items = BuildItems();
-            menuForm.Populate(items);
-        }
     }
 
     private static int GetCurrentDesktopIndex()
