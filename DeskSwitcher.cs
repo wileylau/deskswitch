@@ -394,6 +394,32 @@ class TrayApp : ApplicationContext
         return Guid.Empty;
     }
 
+    public static Color GetAccentColor()
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM"))
+            {
+                if (key != null)
+                {
+                    var v = key.GetValue("AccentColor");
+                    if (v is int)
+                    {
+                        int i = (int)v;
+                        byte a = (byte)((i >> 24) & 0xFF);
+                        byte r = (byte)(i & 0xFF);
+                        byte g = (byte)((i >> 8) & 0xFF);
+                        byte b = (byte)((i >> 16) & 0xFF);
+                        if (a == 0) a = 255;
+                        return Color.FromArgb(a, r, g, b);
+                    }
+                }
+            }
+        }
+        catch { }
+        return SystemColors.Highlight;
+    }
+
     private static bool IsDarkMode()
     {
         try
@@ -494,7 +520,7 @@ class DesktopMenuForm : Form
             secondaryColor = Color.FromArgb(90, 90, 90);
             sepColor = Color.FromArgb(220, 220, 220);
         }
-        accentColor = SystemColors.Highlight;
+        accentColor = TrayApp.GetAccentColor();
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
