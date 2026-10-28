@@ -13,6 +13,8 @@ class TrayApp : ApplicationContext
     private readonly NotifyIcon tray;
     private readonly Timer timer;
     private int lastDesktop = -1;
+    private IntPtr mouseHookHandle = IntPtr.Zero;
+    private LowLevelMouseProc mouseHookProc;
 
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IVirtualDesktopManager
@@ -57,6 +59,21 @@ class TrayApp : ApplicationContext
     private const ushort VK_LEFT = 0x25;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
+    private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string lpModuleName);
+    private const int WH_MOUSE_LL = 14;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_RBUTTONDOWN = 0x0204;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct MSLLHOOKSTRUCT { public POINT pt; public uint mouseData; public uint flags; public uint time; public IntPtr dwExtraInfo; }
+
     class DesktopInfo
     {
         public Guid Id;
@@ -68,7 +85,7 @@ class TrayApp : ApplicationContext
     {
         var menu = new ContextMenuStrip();
         menu.AutoClose = true;
-        menu.MouseDown += (s, e) => { if (!menu.ClientRectangle.Contains(e.Location)) menu.Close(); };
+        menu.Closed += (s, e) => UninstallMouseHook();
         menu.Items.Add("Exit", null, (s, e) => ExitThread());
 
         tray = new NotifyIcon
@@ -83,7 +100,7 @@ class TrayApp : ApplicationContext
             if (e.Button == MouseButtons.Left)
             {
                 tray.ContextMenuStrip.Show(Cursor.Position);
-                tray.ContextMenuStrip.Capture = true;
+                InstallMouseHook();
             }
         };
 
@@ -160,6 +177,38 @@ class TrayApp : ApplicationContext
         input.ki.wVk = vk;
         input.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
         return input;
+    }
+
+    private void InstallMouseHook()
+    {
+        if (mouseHookHandle != IntPtr.Zero) return;
+        mouseHookProc = new LowLevelMouseProc(MouseHookCallback);
+        mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, mouseHookProc, GetModuleHandle(null), 0);
+    }
+
+    private void UninstallMouseHook()
+    {
+        if (mouseHookHandle != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(mouseHookHandle);
+            mouseHookHandle = IntPtr.Zero;
+        }
+        mouseHookProc = null;
+    }
+
+    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && tray.ContextMenuStrip.Visible &&
+            (wParam.ToInt32() == WM_LBUTTONDOWN || wParam.ToInt32() == WM_RBUTTONDOWN))
+        {
+            MSLLHOOKSTRUCT hs = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+            if (!tray.ContextMenuStrip.Bounds.Contains(hs.pt.x, hs.pt.y))
+            {
+                tray.ContextMenuStrip.Close();
+                UninstallMouseHook();
+            }
+        }
+        return CallNextHookEx(mouseHookHandle, nCode, wParam, lParam);
     }
 
     private void RefreshCurrent()
@@ -287,6 +336,7 @@ class TrayApp : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        UninstallMouseHook();
         timer.Stop();
         tray.Visible = false;
         tray.Dispose();
