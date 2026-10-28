@@ -68,7 +68,7 @@ class TrayApp : ApplicationContext
     {
         var menu = new ContextMenuStrip();
         menu.AutoClose = true;
-        menu.LostFocus += (s, e) => { if (menu.Visible) menu.Close(); };
+        menu.MouseDown += (s, e) => { if (!menu.ClientRectangle.Contains(e.Location)) menu.Close(); };
         menu.Items.Add("Exit", null, (s, e) => ExitThread());
 
         tray = new NotifyIcon
@@ -83,7 +83,7 @@ class TrayApp : ApplicationContext
             if (e.Button == MouseButtons.Left)
             {
                 tray.ContextMenuStrip.Show(Cursor.Position);
-                tray.ContextMenuStrip.Focus();
+                tray.ContextMenuStrip.Capture = true;
             }
         };
 
