@@ -227,6 +227,8 @@ class TrayApp : ApplicationContext
                 GetWindowText(hWnd, sb, sb.Capacity);
                 string title = sb.ToString();
                 if (string.IsNullOrWhiteSpace(title)) return true;
+                if (title.IndexOf("Desktop Switcher", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (title.IndexOf("DeskSwitcher", StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
                 Guid id;
                 int hr = Vdm.GetWindowDesktopId(hWnd, out id);
