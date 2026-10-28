@@ -15,6 +15,7 @@ class TrayApp : ApplicationContext
     private readonly NotifyIcon tray;
     private readonly Timer timer;
     private int lastDesktop = -1;
+    private string lastIconLabel;
     private IntPtr mouseHookHandle = IntPtr.Zero;
     private LowLevelMouseProc mouseHookProc;
 
@@ -301,13 +302,44 @@ class TrayApp : ApplicationContext
     private void RefreshCurrent()
     {
         int idx = GetCurrentDesktopIndex();
-        if (idx == lastDesktop)
+        string label = "?";
+        string tooltip = "Desktop ?";
+        if (idx >= 0)
         {
+            var desktops = GetDesktops();
+            if (idx < desktops.Count)
+            {
+                string name = GetDesktopName(desktops[idx], idx);
+                string defaultName = "Desktop " + (idx + 1);
+                if (name == defaultName)
+                    label = (idx + 1).ToString();
+                else if (!string.IsNullOrWhiteSpace(name))
+                    label = name.Substring(0, 1).ToUpperInvariant();
+                else
+                    label = (idx + 1).ToString();
+                tooltip = name;
+            }
+            else
+            {
+                label = (idx + 1).ToString();
+                tooltip = "Desktop " + (idx + 1);
+            }
+        }
+
+        if (idx == lastDesktop && label == lastIconLabel) 
+        {
+            // still refresh visible menu
+            if (menuForm != null && menuForm.Visible)
+            {
+                var items = BuildItems();
+                menuForm.Populate(items);
+            }
             return;
         }
         lastDesktop = idx;
-        tray.Icon = MakeIcon(idx >= 0 ? (idx + 1).ToString() : "?");
-        tray.Text = "Desktop " + (idx >= 0 ? (idx + 1).ToString() : "?");
+        lastIconLabel = label;
+        tray.Icon = MakeIcon(label);
+        tray.Text = tooltip;
         if (menuForm != null && menuForm.Visible)
         {
             var items = BuildItems();
