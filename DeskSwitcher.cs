@@ -20,6 +20,7 @@ class TrayApp : ApplicationContext
     private LowLevelMouseProc mouseHookProc;
 
     private DesktopMenuForm menuForm;
+    private Point lastMenuLocation;
 
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IVirtualDesktopManager
@@ -63,6 +64,7 @@ class TrayApp : ApplicationContext
     private const ushort VK_LWIN = 0x5B;
     private const ushort VK_RIGHT = 0x27;
     private const ushort VK_LEFT = 0x25;
+    private const ushort VK_D = 0x44;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -189,6 +191,15 @@ class TrayApp : ApplicationContext
                 UninstallMouseHook();
                 ExitThread();
             };
+            menuForm.NewDesktopClicked += (s, e) =>
+            {
+                if (menuForm != null) menuForm.Hide();
+                UninstallMouseHook();
+                SendNewDesktop();
+                var t = new System.Windows.Forms.Timer { Interval = 400 };
+                t.Tick += (ss, ee) => { t.Stop(); t.Dispose(); ReopenMenu(); };
+                t.Start();
+            };
             menuForm.Deactivate += (s, e) =>
             {
                 if (menuForm != null && menuForm.Visible)
@@ -223,7 +234,31 @@ class TrayApp : ApplicationContext
         if (y + h > screen.WorkingArea.Bottom) y = screen.WorkingArea.Bottom - h;
         if (y < screen.WorkingArea.Top) y = screen.WorkingArea.Top;
         menuForm.Location = new Point(x, y);
+        lastMenuLocation = menuForm.Location;
 
+        menuForm.Show();
+        try { menuForm.Activate(); } catch { }
+        InstallMouseHook();
+    }
+
+    private void SendNewDesktop()
+    {
+        INPUT[] inputs = new INPUT[6];
+        inputs[0] = KeyInput(VK_CONTROL, false);
+        inputs[1] = KeyInput(VK_LWIN, false);
+        inputs[2] = KeyInput(VK_D, false);
+        inputs[3] = KeyInput(VK_D, true);
+        inputs[4] = KeyInput(VK_LWIN, true);
+        inputs[5] = KeyInput(VK_CONTROL, true);
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    private void ReopenMenu()
+    {
+        if (menuForm == null) return;
+        var items = BuildItems();
+        menuForm.Populate(items);
+        menuForm.Location = lastMenuLocation;
         menuForm.Show();
         try { menuForm.Activate(); } catch { }
         InstallMouseHook();
@@ -620,6 +655,7 @@ class DesktopMenuForm : Form
     public delegate void ItemClickedHandler(int index);
     public event ItemClickedHandler ItemClicked;
     public event EventHandler ExitClicked;
+    public event EventHandler NewDesktopClicked;
 
     private readonly bool dark;
     private bool useBackdrop;
@@ -636,6 +672,7 @@ class DesktopMenuForm : Form
     private readonly List<Panel> rows = new List<Panel>();
     private Panel separator;
     private Panel exitRow;
+    private Panel newDesktopRow;
 
     public DesktopMenuForm(bool dark)
     {
@@ -750,6 +787,7 @@ class DesktopMenuForm : Form
         rows.Clear();
         if (separator != null) { Controls.Remove(separator); separator.Dispose(); separator = null; }
         if (exitRow != null) { Controls.Remove(exitRow); exitRow.Dispose(); exitRow = null; }
+        if (newDesktopRow != null) { Controls.Remove(newDesktopRow); newDesktopRow.Dispose(); newDesktopRow = null; }
 
         int y = padding;
         int rowWidth = ClientSize.Width - padding * 2;
@@ -767,6 +805,12 @@ class DesktopMenuForm : Form
         separator = new Panel { Height = 1, Width = rowWidth, Location = new Point(padding, y + 2), BackColor = sepColor };
         Controls.Add(separator);
         y += separator.Height + (int)(6 * dpiScale);
+
+        newDesktopRow = CreateNewDesktopRow(rowWidth);
+        newDesktopRow.Location = new Point(padding, y);
+        newDesktopRow.Width = rowWidth;
+        Controls.Add(newDesktopRow);
+        y += newDesktopRow.Height + (int)(2 * dpiScale);
 
         exitRow = CreateExitRow(rowWidth);
         exitRow.Location = new Point(padding, y);
@@ -896,6 +940,54 @@ class DesktopMenuForm : Form
         };
         row.Click += (s, e) => { if (ExitClicked != null) ExitClicked(this, EventArgs.Empty); };
         lbl.Click += (s, e) => { if (ExitClicked != null) ExitClicked(this, EventArgs.Empty); };
+
+        return row;
+    }
+
+    private Panel CreateNewDesktopRow(int width)
+    {
+        int rowH = (int)(36 * dpiScale);
+        var row = new Panel { Height = rowH, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        try
+        {
+            using (var path = new GraphicsPath())
+            {
+                int r = 4;
+                path.AddArc(0, 0, r * 2, r * 2, 180, 90);
+                path.AddArc(width - r * 2, 0, r * 2, r * 2, 270, 90);
+                path.AddArc(width - r * 2, rowH - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(0, rowH - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                row.Region = new Region(path);
+            }
+        }
+        catch { }
+        var lbl = new Label
+        {
+            Text = "New desktop",
+            Font = new Font(fontName, 10.5f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = textColor,
+            Location = new Point((int)(16 * dpiScale), (int)(8 * dpiScale)),
+            AutoSize = true,
+            BackColor = Color.Transparent
+        };
+        row.Controls.Add(lbl);
+
+        Color hover = hoverColor;
+        row.MouseEnter += (s, e) => { row.BackColor = hover; };
+        row.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        lbl.MouseEnter += (s, e) => { row.BackColor = hover; };
+        lbl.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        row.Click += (s, e) => { if (NewDesktopClicked != null) NewDesktopClicked(this, EventArgs.Empty); };
+        lbl.Click += (s, e) => { if (NewDesktopClicked != null) NewDesktopClicked(this, EventArgs.Empty); };
 
         return row;
     }
