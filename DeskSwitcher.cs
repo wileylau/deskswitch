@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -16,6 +17,8 @@ class TrayApp : ApplicationContext
     private int lastDesktop = -1;
     private IntPtr mouseHookHandle = IntPtr.Zero;
     private LowLevelMouseProc mouseHookProc;
+
+    private DesktopMenuForm menuForm;
 
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IVirtualDesktopManager
@@ -87,69 +90,115 @@ class TrayApp : ApplicationContext
         public List<string> Titles = new List<string>();
     }
 
+    public class DesktopRowData
+    {
+        public string Name;
+        public string TopTitle;
+        public bool IsCurrent;
+        public int Index;
+    }
+
+    private List<Guid> currentDesktops = new List<Guid>();
+    private List<DesktopInfo> currentInfos = new List<DesktopInfo>();
+    private Guid currentDesktopGuid = Guid.Empty;
+
     public TrayApp()
     {
-        var menu = new ContextMenuStrip();
-        menu.AutoClose = true;
-        menu.Closed += (s, e) => UninstallMouseHook();
-        menu.Items.Add("Exit", null, (s, e) => ExitThread());
-
         tray = new NotifyIcon
         {
-            ContextMenuStrip = menu,
             Visible = true,
             Text = "Desktop Switcher"
         };
         tray.MouseClick += (s, e) =>
         {
-            RebuildMenu();
-            if (e.Button == MouseButtons.Left)
-            {
-                tray.ContextMenuStrip.Show(Cursor.Position);
-                InstallMouseHook();
-            }
+            ShowMenu(Cursor.Position);
         };
 
         timer = new Timer { Interval = 1000 };
         timer.Tick += (s, e) => RefreshCurrent();
         timer.Start();
         RefreshCurrent();
-        RebuildMenu();
     }
 
-    private void RebuildMenu()
+    private void RefreshData()
     {
-        var menu = tray.ContextMenuStrip;
-        menu.Items.Clear();
+        currentDesktops = GetDesktops();
+        currentInfos = CollectDesktops(currentDesktops);
+        currentDesktopGuid = GetCurrentDesktopGuid();
+    }
 
-        var desktops = GetDesktops();
-        var infos = CollectDesktops(desktops);
-        var cur = GetCurrentDesktopGuid();
-
-        for (int i = 0; i < desktops.Count; i++)
+    private List<DesktopRowData> BuildItems()
+    {
+        RefreshData();
+        var items = new List<DesktopRowData>();
+        for (int i = 0; i < currentDesktops.Count; i++)
         {
-            var d = desktops[i];
+            var d = currentDesktops[i];
             DesktopInfo info = null;
-            foreach (var di in infos) if (di.Id == d) { info = di; break; }
+            foreach (var di in currentInfos) if (di.Id == d) { info = di; break; }
 
             string name = GetDesktopName(d, i);
             string topTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
                 ? info.Titles[0] : "(empty)";
             if (topTitle.Length > 45) topTitle = topTitle.Substring(0, 42) + "...";
+            if (name.Length > 28) name = name.Substring(0, 25) + "...";
 
-            string text = name + (d == cur ? "  (current)" : "") + "  -  " + topTitle;
-            var item = new ToolStripMenuItem(text);
-            int targetIndex = i;
-            item.Click += (s, e) => { tray.ContextMenuStrip.Close(); SwitchToDesktop(targetIndex); };
-            if (d == cur) item.Font = new Font(item.Font, System.Drawing.FontStyle.Bold);
-            menu.Items.Add(item);
+            items.Add(new DesktopRowData
+            {
+                Name = name + (d == currentDesktopGuid ? "  (current)" : ""),
+                TopTitle = topTitle,
+                IsCurrent = d == currentDesktopGuid,
+                Index = i
+            });
+        }
+        return items;
+    }
+
+    private void ShowMenu(Point location)
+    {
+        var items = BuildItems();
+
+        if (menuForm == null)
+        {
+            menuForm = new DesktopMenuForm(IsDarkMode());
+            menuForm.ItemClicked += idx =>
+            {
+                if (menuForm != null) menuForm.Hide();
+                UninstallMouseHook();
+                SwitchToDesktop(idx);
+            };
+            menuForm.ExitClicked += (s, e) =>
+            {
+                if (menuForm != null) menuForm.Hide();
+                UninstallMouseHook();
+                ExitThread();
+            };
+            menuForm.Deactivate += (s, e) =>
+            {
+                if (menuForm != null && menuForm.Visible)
+                {
+                    menuForm.Hide();
+                    UninstallMouseHook();
+                }
+            };
         }
 
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Exit", null, (s, e) => ExitThread());
+        menuForm.Populate(items);
 
-        // show menu at cursor on left click
-        // ContextMenuStrip shows automatically on right click; for left click show manually
+        var screen = Screen.FromPoint(location);
+        int w = menuForm.Width;
+        int h = menuForm.Height;
+        int x = location.X;
+        int y = location.Y;
+        if (x + w > screen.WorkingArea.Right) x = screen.WorkingArea.Right - w;
+        if (y + h > screen.WorkingArea.Bottom) y = screen.WorkingArea.Bottom - h;
+        if (x < screen.WorkingArea.Left) x = screen.WorkingArea.Left;
+        if (y < screen.WorkingArea.Top) y = screen.WorkingArea.Top;
+        menuForm.Location = new Point(x, y);
+
+        menuForm.Show();
+        try { menuForm.Activate(); } catch { }
+        InstallMouseHook();
     }
 
     private void SwitchToDesktop(int targetIndex)
@@ -205,13 +254,13 @@ class TrayApp : ApplicationContext
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && tray.ContextMenuStrip.Visible &&
+        if (nCode >= 0 && menuForm != null && menuForm.Visible &&
             (wParam.ToInt32() == WM_LBUTTONDOWN || wParam.ToInt32() == WM_RBUTTONDOWN))
         {
             System.Drawing.Point cp = System.Windows.Forms.Cursor.Position;
-            if (!tray.ContextMenuStrip.Bounds.Contains(cp))
+            if (!menuForm.Bounds.Contains(cp))
             {
-                tray.ContextMenuStrip.Close();
+                menuForm.Hide();
                 UninstallMouseHook();
             }
         }
@@ -239,11 +288,18 @@ class TrayApp : ApplicationContext
     private void RefreshCurrent()
     {
         int idx = GetCurrentDesktopIndex();
-        if (idx == lastDesktop) return;
+        if (idx == lastDesktop)
+        {
+            return;
+        }
         lastDesktop = idx;
         tray.Icon = MakeIcon(idx >= 0 ? (idx + 1).ToString() : "?");
         tray.Text = "Desktop " + (idx >= 0 ? (idx + 1).ToString() : "?");
-        RebuildMenu();
+        if (menuForm != null && menuForm.Visible)
+        {
+            var items = BuildItems();
+            menuForm.Populate(items);
+        }
     }
 
     private static int GetCurrentDesktopIndex()
@@ -338,6 +394,23 @@ class TrayApp : ApplicationContext
         return Guid.Empty;
     }
 
+    private static bool IsDarkMode()
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+            {
+                if (key != null)
+                {
+                    var v = key.GetValue("AppsUseLightTheme");
+                    if (v is int) return (int)v == 0;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private Icon MakeIcon(string text)
     {
         var bmp = new Bitmap(32, 32);
@@ -362,11 +435,275 @@ class TrayApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         UninstallMouseHook();
+        if (menuForm != null)
+        {
+            try { menuForm.Dispose(); } catch { }
+            menuForm = null;
+        }
         timer.Stop();
         tray.Visible = false;
         tray.Dispose();
         base.ExitThreadCore();
     }
+}
+
+class DesktopMenuForm : Form
+{
+    public delegate void ItemClickedHandler(int index);
+    public event ItemClickedHandler ItemClicked;
+    public event EventHandler ExitClicked;
+
+    private readonly bool dark;
+    private bool useBackdrop;
+    private Color bgColor;
+    private Color hoverColor;
+    private Color textColor;
+    private Color secondaryColor;
+    private Color sepColor;
+    private Color accentColor;
+    private string fontName;
+    private int padding = 8;
+
+    private readonly List<Panel> rows = new List<Panel>();
+    private Panel separator;
+    private Panel exitRow;
+
+    public DesktopMenuForm(bool dark)
+    {
+        this.dark = dark;
+
+        fontName = "Segoe UI";
+        foreach (var f in FontFamily.Families)
+        {
+            if (f.Name == "Segoe UI Variable Text") { fontName = f.Name; break; }
+        }
+
+        if (dark)
+        {
+            bgColor = Color.FromArgb(32, 32, 32);
+            hoverColor = Color.FromArgb(55, 55, 55);
+            textColor = Color.FromArgb(240, 240, 240);
+            secondaryColor = Color.FromArgb(160, 160, 160);
+            sepColor = Color.FromArgb(60, 60, 60);
+        }
+        else
+        {
+            bgColor = Color.FromArgb(249, 249, 249);
+            hoverColor = Color.FromArgb(230, 230, 230);
+            textColor = Color.FromArgb(20, 20, 20);
+            secondaryColor = Color.FromArgb(90, 90, 90);
+            sepColor = Color.FromArgb(220, 220, 220);
+        }
+        accentColor = SystemColors.Highlight;
+
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        ShowInTaskbar = false;
+        TopMost = true;
+        DoubleBuffered = true;
+        BackColor = bgColor;
+        ClientSize = new Size(320, 120);
+
+        HandleCreated += (s, e) => ApplyDwm();
+        Resize += (s, e) => ApplyRegion();
+        useBackdrop = false;
+        ApplyRegion();
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
+            return cp;
+        }
+    }
+
+    private void ApplyRegion()
+    {
+        try
+        {
+            using (var path = new GraphicsPath())
+            {
+                int r = 8;
+                var rect = new Rectangle(0, 0, Width, Height);
+                path.AddArc(rect.X, rect.Y, r * 2, r * 2, 180, 90);
+                path.AddArc(rect.Right - r * 2, rect.Y, r * 2, r * 2, 270, 90);
+                path.AddArc(rect.Right - r * 2, rect.Bottom - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(rect.X, rect.Bottom - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                this.Region = new Region(path);
+            }
+        }
+        catch { }
+    }
+
+    private void ApplyDwm()
+    {
+        try
+        {
+            int darkVal = dark ? 1 : 0;
+            DwmSetWindowAttribute(Handle, 20, ref darkVal, 4);
+            int corner = 2;
+            DwmSetWindowAttribute(Handle, 33, ref corner, 4);
+            useBackdrop = false;
+        }
+        catch { useBackdrop = false; }
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        if (useBackdrop) return;
+        using (var b = new SolidBrush(bgColor))
+            e.Graphics.FillRectangle(b, ClientRectangle);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.KeyCode == Keys.Escape)
+        {
+            Hide();
+            e.Handled = true;
+        }
+    }
+
+    public void Populate(List<TrayApp.DesktopRowData> items)
+    {
+        foreach (var r in rows)
+        {
+            Controls.Remove(r);
+            r.Dispose();
+        }
+        rows.Clear();
+        if (separator != null) { Controls.Remove(separator); separator.Dispose(); separator = null; }
+        if (exitRow != null) { Controls.Remove(exitRow); exitRow.Dispose(); exitRow = null; }
+
+        int y = padding;
+        int rowWidth = ClientSize.Width - padding * 2;
+
+        foreach (var it in items)
+        {
+            var row = CreateRow(it, rowWidth);
+            row.Location = new Point(padding, y);
+            row.Width = rowWidth;
+            Controls.Add(row);
+            rows.Add(row);
+            y += row.Height;
+        }
+
+        separator = new Panel { Height = 1, Width = rowWidth, Location = new Point(padding, y + 2), BackColor = sepColor };
+        Controls.Add(separator);
+        y += separator.Height + 6;
+
+        exitRow = CreateExitRow(rowWidth);
+        exitRow.Location = new Point(padding, y);
+        exitRow.Width = rowWidth;
+        Controls.Add(exitRow);
+        y += exitRow.Height;
+
+        ClientSize = new Size(ClientSize.Width, y + padding);
+    }
+
+    private Panel CreateRow(TrayApp.DesktopRowData data, int width)
+    {
+        var row = new Panel { Height = 52, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+
+        if (data.IsCurrent)
+        {
+            var bar = new Panel { Width = 3, Height = 20, Location = new Point(4, 16), BackColor = accentColor };
+            row.Controls.Add(bar);
+        }
+
+        var name = new Label
+        {
+            Text = data.Name,
+            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = textColor,
+            Location = new Point(16, 8),
+            AutoSize = true,
+            BackColor = Color.Transparent
+        };
+        row.Controls.Add(name);
+
+        var title = new Label
+        {
+            Text = data.TopTitle,
+            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size - 1f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = secondaryColor,
+            Location = new Point(16, 30),
+            AutoSize = true,
+            BackColor = Color.Transparent
+        };
+        row.Controls.Add(title);
+
+        Color hover = hoverColor;
+        row.MouseEnter += (s, e) => { row.BackColor = hover; };
+        row.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        foreach (Control c in row.Controls)
+        {
+            c.MouseEnter += (s, e) => { row.BackColor = hover; };
+            c.MouseLeave += (s, e) =>
+            {
+                if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                    row.BackColor = bgColor;
+            };
+            c.Click += (s, e) =>
+            {
+                if (ItemClicked != null) ItemClicked(data.Index);
+            };
+        }
+        row.Click += (s, e) =>
+        {
+            if (ItemClicked != null) ItemClicked(data.Index);
+        };
+
+        return row;
+    }
+
+    private Panel CreateExitRow(int width)
+    {
+        var row = new Panel { Height = 36, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        var lbl = new Label
+        {
+            Text = "Exit",
+            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = textColor,
+            Location = new Point(16, 8),
+            AutoSize = true,
+            BackColor = Color.Transparent
+        };
+        row.Controls.Add(lbl);
+
+        Color hover = hoverColor;
+        row.MouseEnter += (s, e) => { row.BackColor = hover; };
+        row.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        lbl.MouseEnter += (s, e) => { row.BackColor = hover; };
+        lbl.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        row.Click += (s, e) => { if (ExitClicked != null) ExitClicked(this, EventArgs.Empty); };
+        lbl.Click += (s, e) => { if (ExitClicked != null) ExitClicked(this, EventArgs.Empty); };
+
+        return row;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MARGINS { public int cxLeftWidth; public int cxRightWidth; public int cyTopHeight; public int cyBottomHeight; }
+
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int pvAttribute, int cbAttribute);
+    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
 }
 
 static class Program
