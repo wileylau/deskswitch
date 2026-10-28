@@ -22,3 +22,4 @@ Windows tray app showing the current virtual desktop number; left-click lists de
 ## Verification
 
 - No automated tests. Smoke test by running the exe and switching desktops from the tray menu.
+- Single-instance: launching a second instance prompts to kill the existing one.

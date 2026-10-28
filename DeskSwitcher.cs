@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using System.Diagnostics;
 using Microsoft.Win32;
 
 class TrayApp : ApplicationContext
@@ -373,8 +374,45 @@ static class Program
     [STAThread]
     static void Main()
     {
+        const string mutexName = "Local\\DeskSwitcherSingleInstance";
+        bool createdNew;
+        System.Threading.Mutex mutex = new System.Threading.Mutex(true, mutexName, out createdNew);
+
+        if (!createdNew)
+        {
+            DialogResult result = MessageBox.Show(
+                "DeskSwitcher is already running.\nKill the existing instance and start a new one?",
+                "DeskSwitcher",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (result != DialogResult.Yes)
+            {
+                mutex.Dispose();
+                return;
+            }
+
+            foreach (Process p in Process.GetProcessesByName("DeskSwitcher"))
+            {
+                if (p.Id == Process.GetCurrentProcess().Id) continue;
+                try { p.Kill(); p.WaitForExit(2000); } catch { }
+            }
+
+            mutex.Dispose();
+            mutex = new System.Threading.Mutex(true, mutexName, out createdNew);
+            if (!createdNew)
+            {
+                MessageBox.Show("Could not start a new instance.", "DeskSwitcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                mutex.Dispose();
+                return;
+            }
+        }
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new TrayApp());
+
+        try { mutex.ReleaseMutex(); } catch { }
+        mutex.Dispose();
     }
 }
