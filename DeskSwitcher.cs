@@ -74,6 +74,11 @@ class TrayApp : ApplicationContext
     [StructLayout(LayoutKind.Sequential)]
     struct MSLLHOOKSTRUCT { public POINT pt; public uint mouseData; public uint flags; public uint time; public IntPtr dwExtraInfo; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
     class DesktopInfo
     {
         public Guid Id;
@@ -201,8 +206,8 @@ class TrayApp : ApplicationContext
         if (nCode >= 0 && tray.ContextMenuStrip.Visible &&
             (wParam.ToInt32() == WM_LBUTTONDOWN || wParam.ToInt32() == WM_RBUTTONDOWN))
         {
-            MSLLHOOKSTRUCT hs = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
-            if (!tray.ContextMenuStrip.Bounds.Contains(hs.pt.x, hs.pt.y))
+            System.Drawing.Point cp = System.Windows.Forms.Cursor.Position;
+            if (!tray.ContextMenuStrip.Bounds.Contains(cp))
             {
                 tray.ContextMenuStrip.Close();
                 UninstallMouseHook();
