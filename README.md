@@ -17,7 +17,7 @@ A lightweight Windows tray app for virtual desktops.
 Requires the .NET Framework 4.x C# compiler (no SDK needed):
 
 ```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:DeskSwitcher.exe DeskSwitcher.cs /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:DeskSwitcher.exe DeskSwitcher.cs /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll /reference:System.Runtime.dll /reference:System.Runtime.InteropServices.WindowsRuntime.dll /reference:C:\Windows\System32\WinMetadata\Windows.UI.winmd /reference:C:\Windows\System32\WinMetadata\Windows.Data.winmd
 ```
 
 ## Run

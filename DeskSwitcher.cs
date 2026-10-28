@@ -8,6 +8,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using System.Diagnostics;
+using Windows.UI.Notifications;
+using Windows.Data.Xml.Dom;
 using Microsoft.Win32;
 
 class TrayApp : ApplicationContext
@@ -103,6 +105,7 @@ class TrayApp : ApplicationContext
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("shell32.dll")] private static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
     [DllImport("combase.dll")] private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, uint length, out IntPtr hstring);
     [DllImport("combase.dll")] private static extern int WindowsDeleteString(IntPtr hstring);
     [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string lpModuleName);
@@ -149,6 +152,8 @@ class TrayApp : ApplicationContext
             Visible = true,
             Text = "Desktop Switcher"
         };
+
+        ShowToast();
         tray.MouseClick += (s, e) =>
         {
             ShowMenu(Cursor.Position);
@@ -543,6 +548,21 @@ class TrayApp : ApplicationContext
         }
         catch { }
         return "Desktop " + (index + 1);
+    }
+
+    private void ShowToast()
+    {
+        try
+        {
+            SetCurrentProcessExplicitAppUserModelID("DeskSwitcher");
+            var template = ToastNotificationManager.GetTemplateContent(ToastTemplateType.ToastText02);
+            var textNodes = template.GetElementsByTagName("text");
+            textNodes[0].AppendChild(template.CreateTextNode("DeskSwitcher"));
+            textNodes[1].AppendChild(template.CreateTextNode("DeskSwitcher is running. Pin this icon to the taskbar so it stays visible."));
+            var toast = new ToastNotification(template);
+            ToastNotificationManager.CreateToastNotifier("DeskSwitcher").Show(toast);
+        }
+        catch { }
     }
 
     private void RefreshCurrent()

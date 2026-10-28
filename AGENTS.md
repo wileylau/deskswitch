@@ -6,7 +6,7 @@ Windows tray app showing the current virtual desktop number; left-click lists de
 
 - Compiler: .NET Framework 4.x `csc.exe` (no dotnet SDK installed).
 - Build:
-  `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:DeskSwitcher.exe DeskSwitcher.cs /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll`
+  `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:DeskSwitcher.exe DeskSwitcher.cs /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll /reference:System.Runtime.dll /reference:System.Runtime.InteropServices.WindowsRuntime.dll /reference:C:\Windows\System32\WinMetadata\Windows.UI.winmd /reference:C:\Windows\System32\WinMetadata\Windows.Data.winmd`
 - Run: `.\DeskSwitcher.exe`
 - `*.exe` is gitignored; do not commit build artifacts.
 
