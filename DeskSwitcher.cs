@@ -183,8 +183,8 @@ class TrayApp : ApplicationContext
                 }
             }
             string topTitle = rawTitle;
-            if (tooLong && info != null && info.Processes.Count > 0)
-                topTitle = string.Join(", ", info.Processes.ToArray());
+            if (tooLong && info != null && !string.IsNullOrWhiteSpace(info.TopProcess))
+                topTitle = info.TopProcess;
             if (topTitle.Length > 55) topTitle = topTitle.Substring(0, 52) + "...";
             if (name.Length > 28) name = name.Substring(0, 25) + "...";
 
