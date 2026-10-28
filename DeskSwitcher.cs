@@ -133,7 +133,7 @@ class TrayApp : ApplicationContext
             string text = "Desktop " + (i + 1) + (d == cur ? "  (current)" : "") + "  -  " + topTitle;
             var item = new ToolStripMenuItem(text);
             int targetIndex = i;
-            item.Click += (s, e) => SwitchToDesktop(targetIndex);
+            item.Click += (s, e) => { tray.ContextMenuStrip.Close(); SwitchToDesktop(targetIndex); };
             if (d == cur) item.Font = new Font(item.Font, System.Drawing.FontStyle.Bold);
             menu.Items.Add(item);
         }
