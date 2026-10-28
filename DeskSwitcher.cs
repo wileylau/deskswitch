@@ -22,6 +22,29 @@ class TrayApp : ApplicationContext
     private DesktopMenuForm menuForm;
     private Point lastMenuLocation;
 
+    [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IServiceProvider
+    {
+        [PreserveSig] int QueryService(ref Guid guidService, ref Guid riid, out IntPtr ppvObject);
+    }
+
+    [ComImport, Guid("53F5CA0B-158F-4124-900C-057158060B27"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IVirtualDesktopManagerInternal
+    {
+        [PreserveSig] int GetCount(out uint pCount);
+        [PreserveSig] int MoveViewToDesktop(IntPtr pView, IntPtr pDesktop);
+        [PreserveSig] int CanViewMoveDesktops(IntPtr pView, out bool pfCanViewMoveDesktops);
+        [PreserveSig] int GetCurrentDesktop(out IntPtr desktop);
+        [PreserveSig] int GetDesktops(out IntPtr ppDesktops);
+    }
+
+    [ComImport, Guid("92CA9DCD-5622-4BBA-A805-5E9F541BD8C9"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IObjectArray
+    {
+        [PreserveSig] int GetCount(out uint count);
+        [PreserveSig] int GetAt(uint index, ref Guid riid, out IntPtr ppv);
+    }
+
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IVirtualDesktopManager
     {
@@ -65,9 +88,13 @@ class TrayApp : ApplicationContext
     private const ushort VK_RIGHT = 0x27;
     private const ushort VK_LEFT = 0x25;
     private const ushort VK_D = 0x44;
+    private const ushort VK_F4 = 0x73;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int RemoveDesktopDelegate(IntPtr self, IntPtr pRemove, IntPtr pFallback);
 
     [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
@@ -200,6 +227,15 @@ class TrayApp : ApplicationContext
                 t.Tick += (ss, ee) => { t.Stop(); t.Dispose(); ReopenMenu(); };
                 t.Start();
             };
+            menuForm.ItemDeleted += idx =>
+            {
+                if (menuForm != null) menuForm.Hide();
+                UninstallMouseHook();
+                DeleteDesktop(idx);
+                var t = new System.Windows.Forms.Timer { Interval = 400 };
+                t.Tick += (ss, ee) => { t.Stop(); t.Dispose(); ReopenMenu(); };
+                t.Start();
+            };
             menuForm.Deactivate += (s, e) =>
             {
                 if (menuForm != null && menuForm.Visible)
@@ -241,6 +277,18 @@ class TrayApp : ApplicationContext
         InstallMouseHook();
     }
 
+    private void SendCloseDesktop()
+    {
+        INPUT[] inputs = new INPUT[6];
+        inputs[0] = KeyInput(VK_CONTROL, false);
+        inputs[1] = KeyInput(VK_LWIN, false);
+        inputs[2] = KeyInput(VK_F4, false);
+        inputs[3] = KeyInput(VK_F4, true);
+        inputs[4] = KeyInput(VK_LWIN, true);
+        inputs[5] = KeyInput(VK_CONTROL, true);
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
     private void SendNewDesktop()
     {
         INPUT[] inputs = new INPUT[6];
@@ -262,6 +310,72 @@ class TrayApp : ApplicationContext
         menuForm.Show();
         try { menuForm.Activate(); } catch { }
         InstallMouseHook();
+    }
+
+    private IntPtr GetInternalManagerPtr()
+    {
+        try
+        {
+            var shellType = Type.GetTypeFromCLSID(new Guid("c2f03a33-21f5-47fa-b4bb-156362a2f239"));
+            var shell = Activator.CreateInstance(shellType) as IServiceProvider;
+            Guid service = new Guid("c5e0cdca-7b6e-41b2-9fc4-d93975cc467b");
+            Guid iid = new Guid("53f5ca0b-158f-4124-900c-057158060b27");
+            IntPtr ptr;
+            int hr = shell.QueryService(ref service, ref iid, out ptr);
+            if (hr == 0 && ptr != IntPtr.Zero) return ptr;
+        }
+        catch { }
+        return IntPtr.Zero;
+    }
+
+    private void DeleteDesktop(int index)
+    {
+        var desktops = GetDesktops();
+        if (index < 0 || index >= desktops.Count) return;
+        if (desktops.Count <= 1) return;
+
+        IntPtr mgrPtr = GetInternalManagerPtr();
+        if (mgrPtr == IntPtr.Zero) return;
+        try
+        {
+            var mgr = (IVirtualDesktopManagerInternal)Marshal.GetTypedObjectForIUnknown(mgrPtr, typeof(IVirtualDesktopManagerInternal));
+            IntPtr arrPtr;
+            int hr = mgr.GetDesktops(out arrPtr);
+            if (hr != 0 || arrPtr == IntPtr.Zero) return;
+            try
+            {
+                var arr = (IObjectArray)Marshal.GetTypedObjectForIUnknown(arrPtr, typeof(IObjectArray));
+                uint count;
+                arr.GetCount(out count);
+                if (index >= count) return;
+
+                Guid vdIid = new Guid("3f07f4be-b107-441a-af0f-39d82529072c");
+                IntPtr targetPtr;
+                arr.GetAt((uint)index, ref vdIid, out targetPtr);
+                if (targetPtr == IntPtr.Zero) return;
+
+                int fbIndex = (index == 0) ? 1 : 0;
+                IntPtr fallbackPtr;
+                arr.GetAt((uint)fbIndex, ref vdIid, out fallbackPtr);
+                if (fallbackPtr == IntPtr.Zero) { Marshal.Release(targetPtr); return; }
+
+                IntPtr vtable = Marshal.ReadIntPtr(mgrPtr);
+                IntPtr fn = Marshal.ReadIntPtr(vtable, 13 * IntPtr.Size);
+                var del = (RemoveDesktopDelegate)Marshal.GetDelegateForFunctionPointer(fn, typeof(RemoveDesktopDelegate));
+                del(mgrPtr, targetPtr, fallbackPtr);
+
+                Marshal.Release(targetPtr);
+                Marshal.Release(fallbackPtr);
+            }
+            finally
+            {
+                Marshal.Release(arrPtr);
+            }
+        }
+        finally
+        {
+            Marshal.Release(mgrPtr);
+        }
     }
 
     private void SwitchToDesktop(int targetIndex)
@@ -642,7 +756,9 @@ class TrayApp : ApplicationContext
 class DesktopMenuForm : Form
 {
     public delegate void ItemClickedHandler(int index);
+    public delegate void ItemDeletedHandler(int index);
     public event ItemClickedHandler ItemClicked;
+    public event ItemDeletedHandler ItemDeleted;
     public event EventHandler ExitClicked;
     public event EventHandler NewDesktopClicked;
 
@@ -877,6 +993,29 @@ class DesktopMenuForm : Form
                 if (ItemClicked != null) ItemClicked(data.Index);
             };
         }
+        var del = new Label
+        {
+            Text = "\u00D7",
+            Font = new Font(fontName, 12f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = secondaryColor,
+            Location = new Point(width - (int)(22 * dpiScale), (int)(8 * dpiScale)),
+            AutoSize = true,
+            BackColor = Color.Transparent,
+            Cursor = Cursors.Hand
+        };
+        row.Controls.Add(del);
+
+        del.MouseEnter += (s, e) => { row.BackColor = hover; };
+        del.MouseLeave += (s, e) =>
+        {
+            if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
+                row.BackColor = bgColor;
+        };
+        del.Click += (s, e) =>
+        {
+            if (ItemDeleted != null) ItemDeleted(data.Index);
+        };
+
         row.Click += (s, e) =>
         {
             if (ItemClicked != null) ItemClicked(data.Index);
