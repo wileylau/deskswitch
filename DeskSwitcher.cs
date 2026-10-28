@@ -452,23 +452,54 @@ class TrayApp : ApplicationContext
 
     private Icon MakeIcon(string text)
     {
-        var bmp = new Bitmap(32, 32);
+        const int size = 32;
+        var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
         {
-            g.Clear(Color.FromArgb(0, 0, 0, 0));
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            using (var font = new Font("Segoe UI", 16f, FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var brush = new SolidBrush(Color.White))
-            using (var bg = new SolidBrush(Color.FromArgb(200, 0, 120, 215)))
+
+            string fontName = "Segoe UI";
+            foreach (var f in FontFamily.Families)
             {
-                g.FillEllipse(bg, 2, 2, 28, 28);
+                if (f.Name == "Segoe UI Variable Display") { fontName = f.Name; break; }
+                if (f.Name == "Segoe UI Variable Text" && fontName == "Segoe UI") fontName = f.Name;
+            }
+            Font font = null;
+            for (float fs = 30f; fs >= 8f; fs -= 1f)
+            {
+                var f = new Font(fontName, fs, FontStyle.Bold, GraphicsUnit.Pixel);
+                var sz = g.MeasureString(text, f);
+                if (sz.Width <= size && sz.Height <= size)
+                {
+                    font = f;
+                    break;
+                }
+                f.Dispose();
+            }
+            if (font == null) font = new Font(fontName, 8f, FontStyle.Regular, GraphicsUnit.Pixel);
+            using (font)
+            using (var brush = new SolidBrush(Color.White))
+            {
                 var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                g.DrawString(text, font, brush, new RectangleF(0, 0, 32, 32), sf);
+                g.DrawString(text, font, brush, new RectangleF(0, 0, size, size), sf);
             }
         }
         var hicon = bmp.GetHicon();
         return Icon.FromHandle(hicon);
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle r, int radius)
+    {
+        var path = new GraphicsPath();
+        int d = radius * 2;
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     protected override void ExitThreadCore()
