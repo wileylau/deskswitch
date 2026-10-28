@@ -96,10 +96,15 @@ class TrayApp : ApplicationContext
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int RemoveDesktopDelegate(IntPtr self, IntPtr pRemove, IntPtr pFallback);
 
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int SetDesktopNameDelegate(IntPtr self, IntPtr pDesktop, IntPtr hstring);
+
     [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("combase.dll")] private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, uint length, out IntPtr hstring);
+    [DllImport("combase.dll")] private static extern int WindowsDeleteString(IntPtr hstring);
     [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string lpModuleName);
     private const int WH_MOUSE_LL = 14;
     private const int WM_LBUTTONDOWN = 0x0201;
@@ -127,6 +132,7 @@ class TrayApp : ApplicationContext
     public class DesktopRowData
     {
         public string Name;
+        public string DesktopName;
         public string TopTitle;
         public bool IsCurrent;
         public int Index;
@@ -191,6 +197,7 @@ class TrayApp : ApplicationContext
             items.Add(new DesktopRowData
             {
                 Name = name + (d == currentDesktopGuid ? "  (current)" : ""),
+                DesktopName = name,
                 TopTitle = topTitle,
                 IsCurrent = d == currentDesktopGuid,
                 Index = i
@@ -235,6 +242,13 @@ class TrayApp : ApplicationContext
                 var t = new System.Windows.Forms.Timer { Interval = 400 };
                 t.Tick += (ss, ee) => { t.Stop(); t.Dispose(); ReopenMenu(); };
                 t.Start();
+            };
+            menuForm.RenameCommitted += (idx, newName) =>
+            {
+                RenameDesktop(idx, newName);
+                lastDesktop = -1;
+                lastIconLabel = null;
+                RefreshCurrent();
             };
             menuForm.Deactivate += (s, e) =>
             {
@@ -375,6 +389,75 @@ class TrayApp : ApplicationContext
         finally
         {
             Marshal.Release(mgrPtr);
+        }
+    }
+
+    private void RenameDesktop(int index, string newName)
+    {
+        var desktops = GetDesktops();
+        if (index < 0 || index >= desktops.Count) return;
+
+        IntPtr mgrPtr = GetInternalManagerPtr();
+        if (mgrPtr == IntPtr.Zero) return;
+        try
+        {
+            var mgr = (IVirtualDesktopManagerInternal)Marshal.GetTypedObjectForIUnknown(mgrPtr, typeof(IVirtualDesktopManagerInternal));
+            IntPtr arrPtr;
+            int hr = mgr.GetDesktops(out arrPtr);
+            if (hr != 0 || arrPtr == IntPtr.Zero) return;
+            try
+            {
+                var arr = (IObjectArray)Marshal.GetTypedObjectForIUnknown(arrPtr, typeof(IObjectArray));
+                Guid vdIid = new Guid("3f07f4be-b107-441a-af0f-39d82529072c");
+                IntPtr pDesktop;
+                arr.GetAt((uint)index, ref vdIid, out pDesktop);
+                if (pDesktop == IntPtr.Zero) return;
+
+                IntPtr hstr;
+                WindowsCreateString(newName, (uint)newName.Length, out hstr);
+                IntPtr vtable = Marshal.ReadIntPtr(mgrPtr);
+                IntPtr fn = Marshal.ReadIntPtr(vtable, 16 * IntPtr.Size);
+                var del = (SetDesktopNameDelegate)Marshal.GetDelegateForFunctionPointer(fn, typeof(SetDesktopNameDelegate));
+                del(mgrPtr, pDesktop, hstr);
+                WindowsDeleteString(hstr);
+                Marshal.Release(pDesktop);
+            }
+            finally
+            {
+                Marshal.Release(arrPtr);
+            }
+        }
+        finally
+        {
+            Marshal.Release(mgrPtr);
+        }
+    }
+
+    private string PromptRename(string current)
+    {
+        using (var f = new Form())
+        {
+            f.Text = "Rename desktop";
+            f.FormBorderStyle = FormBorderStyle.FixedDialog;
+            f.StartPosition = FormStartPosition.CenterScreen;
+            f.ClientSize = new Size(300, 90);
+            f.TopMost = true;
+            f.MaximizeBox = false;
+            f.MinimizeBox = false;
+
+            var tb = new TextBox { Text = current, Left = 10, Top = 10, Width = 260 };
+            var ok = new Button { Text = "OK", Left = 120, Top = 45, Width = 75, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "Cancel", Left = 205, Top = 45, Width = 75, DialogResult = DialogResult.Cancel };
+
+            f.Controls.Add(tb);
+            f.Controls.Add(ok);
+            f.Controls.Add(cancel);
+            f.AcceptButton = ok;
+            f.CancelButton = cancel;
+
+            if (f.ShowDialog() == DialogResult.OK)
+                return tb.Text.Trim();
+            return null;
         }
     }
 
@@ -759,6 +842,7 @@ class DesktopMenuForm : Form
     public delegate void ItemDeletedHandler(int index);
     public event ItemClickedHandler ItemClicked;
     public event ItemDeletedHandler ItemDeleted;
+    public event Action<int, string> RenameCommitted;
     public event EventHandler ExitClicked;
     public event EventHandler NewDesktopClicked;
 
@@ -778,6 +862,9 @@ class DesktopMenuForm : Form
     private Panel separator;
     private Panel exitRow;
     private Panel newDesktopRow;
+    private TextBox editBox;
+    private Label editLabel;
+    private int editIndex = -1;
 
     public DesktopMenuForm(bool dark)
     {
@@ -961,13 +1048,14 @@ class DesktopMenuForm : Form
             BackColor = Color.Transparent
         };
         row.Controls.Add(name);
+        name.DoubleClick += (s, e) => { BeginRename(data.Index, name, data.DesktopName); };
 
         var title = new Label
         {
             Text = data.TopTitle,
             Font = new Font(fontName, 9f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = secondaryColor,
-            Location = new Point((int)(16 * dpiScale), (int)(28 * dpiScale)),
+            Location = new Point((int)(16 * dpiScale), (int)(32 * dpiScale)),
             AutoSize = true,
             BackColor = Color.Transparent
         };
@@ -988,11 +1076,19 @@ class DesktopMenuForm : Form
                 if (!row.ClientRectangle.Contains(row.PointToClient(Cursor.Position)))
                     row.BackColor = bgColor;
             };
-            c.Click += (s, e) =>
-            {
-                if (ItemClicked != null) ItemClicked(data.Index);
-            };
         }
+
+        var nameClickTimer = new Timer { Interval = 300 };
+        nameClickTimer.Tick += (s, e) =>
+        {
+            nameClickTimer.Stop();
+            if (ItemClicked != null) ItemClicked(data.Index);
+        };
+        name.Click += (s, e) => { nameClickTimer.Stop(); nameClickTimer.Start(); };
+        name.DoubleClick += (s, e) => { nameClickTimer.Stop(); BeginRename(data.Index, name, data.DesktopName); };
+
+        title.Click += (s, e) => { if (ItemClicked != null) ItemClicked(data.Index); };
+        row.Click += (s, e) => { if (ItemClicked != null) ItemClicked(data.Index); };
         var del = new Label
         {
             Text = "\u00D7",
@@ -1016,12 +1112,94 @@ class DesktopMenuForm : Form
             if (ItemDeleted != null) ItemDeleted(data.Index);
         };
 
-        row.Click += (s, e) =>
-        {
-            if (ItemClicked != null) ItemClicked(data.Index);
-        };
-
         return row;
+    }
+
+    private void BeginRename(int index, Label nameLabel, string currentName)
+    {
+        if (editBox != null) return;
+        editIndex = index;
+        editLabel = nameLabel;
+        nameLabel.Visible = false;
+
+        var row = nameLabel.Parent as Panel;
+        editBox = new TextBox
+        {
+            Text = currentName,
+            Font = nameLabel.Font,
+            ForeColor = textColor,
+            BackColor = bgColor,
+            Location = nameLabel.Location,
+            Width = Math.Max((int)(120 * dpiScale), row.ClientSize.Width - nameLabel.Left - (int)(8 * dpiScale)),
+            Height = (int)(16 * dpiScale),
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        row.Controls.Add(editBox);
+        editBox.Focus();
+        editBox.SelectAll();
+
+        editBox.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                CommitRename();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                CancelRename();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+        };
+        editBox.LostFocus += (s, e) => CommitRename();
+    }
+
+    private void CommitRename()
+    {
+        if (editBox == null) return;
+        string text = editBox.Text.Trim();
+        int idx = editIndex;
+        var lbl = editLabel;
+        var box = editBox;
+
+        editBox = null;
+        editLabel = null;
+        editIndex = -1;
+
+        Panel row = (lbl != null) ? (lbl.Parent as Panel) : null;
+        if (lbl != null && row != null && row.Controls.Contains(box))
+        {
+            row.Controls.Remove(box);
+            box.Dispose();
+            lbl.Visible = true;
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                string suffix = lbl.Text.Contains("(current)") ? "  (current)" : "";
+                lbl.Text = text + suffix;
+            }
+        }
+
+        if (RenameCommitted != null && !string.IsNullOrWhiteSpace(text))
+            RenameCommitted(idx, text);
+    }
+
+    private void CancelRename()
+    {
+        if (editBox == null) return;
+        var box = editBox;
+        var lbl = editLabel;
+        editBox = null;
+        editLabel = null;
+        editIndex = -1;
+        Panel row = (lbl != null) ? (lbl.Parent as Panel) : null;
+        if (lbl != null && row != null && row.Controls.Contains(box))
+        {
+            row.Controls.Remove(box);
+            box.Dispose();
+            lbl.Visible = true;
+        }
     }
 
     private Panel CreateExitRow(int width)
