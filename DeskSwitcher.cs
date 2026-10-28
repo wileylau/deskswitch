@@ -609,6 +609,20 @@ class DesktopMenuForm : Form
     private Panel CreateRow(TrayApp.DesktopRowData data, int width)
     {
         var row = new Panel { Height = 52, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        try
+        {
+            using (var path = new GraphicsPath())
+            {
+                int r = 4;
+                path.AddArc(0, 0, r * 2, r * 2, 180, 90);
+                path.AddArc(width - r * 2, 0, r * 2, r * 2, 270, 90);
+                path.AddArc(width - r * 2, 52 - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(0, 52 - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                row.Region = new Region(path);
+            }
+        }
+        catch { }
 
         if (data.IsCurrent)
         {
@@ -619,7 +633,7 @@ class DesktopMenuForm : Form
         var name = new Label
         {
             Text = data.Name,
-            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size, FontStyle.Regular, GraphicsUnit.Point),
+            Font = new Font(fontName, 10.5f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = textColor,
             Location = new Point(16, 8),
             AutoSize = true,
@@ -630,7 +644,7 @@ class DesktopMenuForm : Form
         var title = new Label
         {
             Text = data.TopTitle,
-            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size - 1f, FontStyle.Regular, GraphicsUnit.Point),
+            Font = new Font(fontName, 9f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = secondaryColor,
             Location = new Point(16, 30),
             AutoSize = true,
@@ -669,10 +683,24 @@ class DesktopMenuForm : Form
     private Panel CreateExitRow(int width)
     {
         var row = new Panel { Height = 36, Width = width, Cursor = Cursors.Hand, BackColor = bgColor };
+        try
+        {
+            using (var path = new GraphicsPath())
+            {
+                int r = 4;
+                path.AddArc(0, 0, r * 2, r * 2, 180, 90);
+                path.AddArc(width - r * 2, 0, r * 2, r * 2, 270, 90);
+                path.AddArc(width - r * 2, 36 - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(0, 36 - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                row.Region = new Region(path);
+            }
+        }
+        catch { }
         var lbl = new Label
         {
             Text = "Exit",
-            Font = new Font(SystemFonts.MenuFont.FontFamily, SystemFonts.MenuFont.Size, FontStyle.Regular, GraphicsUnit.Point),
+            Font = new Font(fontName, 10.5f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = textColor,
             Location = new Point(16, 8),
             AutoSize = true,
