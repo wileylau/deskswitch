@@ -137,6 +137,7 @@ class TrayApp : ApplicationContext
         public string Name;
         public string DesktopName;
         public string TopTitle;
+        public string FullTitle;
         public bool IsCurrent;
         public int Index;
     }
@@ -204,6 +205,7 @@ class TrayApp : ApplicationContext
                 Name = name + (d == currentDesktopGuid ? "  (current)" : ""),
                 DesktopName = name,
                 TopTitle = topTitle,
+                FullTitle = rawTitle == "(empty)" ? null : rawTitle,
                 IsCurrent = d == currentDesktopGuid,
                 Index = i
             });
@@ -885,6 +887,7 @@ class DesktopMenuForm : Form
     private TextBox editBox;
     private Label editLabel;
     private int editIndex = -1;
+    private ToolTip toolTip;
 
     public DesktopMenuForm(bool dark)
     {
@@ -922,6 +925,7 @@ class DesktopMenuForm : Form
         BackColor = bgColor;
         dpiScale = DeviceDpi / 96f;
         padding = (int)(8 * dpiScale);
+        toolTip = new ToolTip { InitialDelay = 400, AutoPopDelay = 10000, ReshowDelay = 200 };
         ClientSize = new Size((int)(380 * dpiScale), (int)(120 * dpiScale));
 
         HandleCreated += (s, e) => ApplyDwm();
@@ -1080,6 +1084,13 @@ class DesktopMenuForm : Form
             BackColor = Color.Transparent
         };
         row.Controls.Add(title);
+
+        if (!string.IsNullOrWhiteSpace(data.FullTitle))
+        {
+            toolTip.SetToolTip(row, data.FullTitle);
+            toolTip.SetToolTip(name, data.FullTitle);
+            toolTip.SetToolTip(title, data.FullTitle);
+        }
 
         Color hover = hoverColor;
         row.MouseEnter += (s, e) => { row.BackColor = hover; };
