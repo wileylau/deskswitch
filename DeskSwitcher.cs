@@ -12,7 +12,6 @@ class TrayApp : ApplicationContext
 {
     private readonly NotifyIcon tray;
     private readonly Timer timer;
-    private SummaryForm summary;
     private int lastDesktop = -1;
 
     [ComImport, Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -33,7 +32,37 @@ class TrayApp : ApplicationContext
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+    [DllImport("user32.dll")] private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     private const uint GW_OWNER = 4;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct INPUT
+    {
+        public uint type;
+        public KEYBDINPUT ki;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+    private const uint INPUT_KEYBOARD = 1;
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_LWIN = 0x5B;
+    private const ushort VK_RIGHT = 0x27;
+    private const ushort VK_LEFT = 0x25;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    class DesktopInfo
+    {
+        public Guid Id;
+        public IntPtr TopWindow;
+        public List<string> Titles = new List<string>();
+    }
 
     public TrayApp()
     {
@@ -48,13 +77,84 @@ class TrayApp : ApplicationContext
         };
         tray.MouseClick += (s, e) =>
         {
-            if (e.Button == MouseButtons.Left) ShowSummary();
+            RebuildMenu();
+            if (e.Button == MouseButtons.Left)
+                tray.ContextMenuStrip.Show(Cursor.Position);
         };
 
         timer = new Timer { Interval = 1000 };
         timer.Tick += (s, e) => RefreshCurrent();
         timer.Start();
         RefreshCurrent();
+        RebuildMenu();
+    }
+
+    private void RebuildMenu()
+    {
+        var menu = tray.ContextMenuStrip;
+        menu.Items.Clear();
+
+        var desktops = GetDesktops();
+        var infos = CollectDesktops(desktops);
+        var cur = GetCurrentDesktopGuid();
+
+        for (int i = 0; i < desktops.Count; i++)
+        {
+            var d = desktops[i];
+            DesktopInfo info = null;
+            foreach (var di in infos) if (di.Id == d) { info = di; break; }
+
+            string topTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
+                ? info.Titles[0] : "(empty)";
+            if (topTitle.Length > 45) topTitle = topTitle.Substring(0, 42) + "...";
+
+            string text = "Desktop " + (i + 1) + (d == cur ? "  (current)" : "") + "  -  " + topTitle;
+            var item = new ToolStripMenuItem(text);
+            int targetIndex = i;
+            item.Click += (s, e) => SwitchToDesktop(targetIndex);
+            if (d == cur) item.Font = new Font(item.Font, System.Drawing.FontStyle.Bold);
+            menu.Items.Add(item);
+        }
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (s, e) => ExitThread());
+
+        // show menu at cursor on left click
+        // ContextMenuStrip shows automatically on right click; for left click show manually
+    }
+
+    private void SwitchToDesktop(int targetIndex)
+    {
+        int current = GetCurrentDesktopIndex();
+        if (targetIndex == current) return;
+        bool right = targetIndex > current;
+        int steps = Math.Abs(targetIndex - current);
+        for (int i = 0; i < steps; i++)
+        {
+            SendKeyCombo(right ? VK_RIGHT : VK_LEFT);
+            System.Threading.Thread.Sleep(80);
+        }
+    }
+
+    private static void SendKeyCombo(ushort arrowKey)
+    {
+        INPUT[] inputs = new INPUT[6];
+        inputs[0] = KeyInput(VK_CONTROL, false);
+        inputs[1] = KeyInput(VK_LWIN, false);
+        inputs[2] = KeyInput(arrowKey, false);
+        inputs[3] = KeyInput(arrowKey, true);
+        inputs[4] = KeyInput(VK_LWIN, true);
+        inputs[5] = KeyInput(VK_CONTROL, true);
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    private static INPUT KeyInput(ushort vk, bool keyUp)
+    {
+        INPUT input = new INPUT();
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+        return input;
     }
 
     private void RefreshCurrent()
@@ -64,6 +164,7 @@ class TrayApp : ApplicationContext
         lastDesktop = idx;
         tray.Icon = MakeIcon(idx >= 0 ? (idx + 1).ToString() : "?");
         tray.Text = "Desktop " + (idx >= 0 ? (idx + 1).ToString() : "?");
+        RebuildMenu();
     }
 
     private static int GetCurrentDesktopIndex()
@@ -109,6 +210,53 @@ class TrayApp : ApplicationContext
         return list;
     }
 
+    private List<DesktopInfo> CollectDesktops(List<Guid> desktops)
+    {
+        var result = new Dictionary<Guid, DesktopInfo>();
+        foreach (var d in desktops) result[d] = new DesktopInfo { Id = d };
+
+        EnumWindows((hWnd, _) =>
+        {
+            try
+            {
+                if (!IsWindowVisible(hWnd)) return true;
+                if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero) return true;
+                int len = GetWindowTextLength(hWnd);
+                if (len <= 0) return true;
+                var sb = new StringBuilder(len + 1);
+                GetWindowText(hWnd, sb, sb.Capacity);
+                string title = sb.ToString();
+                if (string.IsNullOrWhiteSpace(title)) return true;
+
+                Guid id;
+                int hr = Vdm.GetWindowDesktopId(hWnd, out id);
+                if (hr != 0) return true;
+                if (!result.ContainsKey(id)) result[id] = new DesktopInfo { Id = id };
+                var info = result[id];
+                if (info.TopWindow == IntPtr.Zero) info.TopWindow = hWnd;
+                info.Titles.Add(title);
+            }
+            catch { }
+            return true;
+        }, IntPtr.Zero);
+
+        return new List<DesktopInfo>(result.Values);
+    }
+
+    private Guid GetCurrentDesktopGuid()
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops"))
+            {
+                var cur = (byte[])key.GetValue("CurrentVirtualDesktop");
+                if (cur != null) return new Guid(cur);
+            }
+        }
+        catch { }
+        return Guid.Empty;
+    }
+
     private Icon MakeIcon(string text)
     {
         var bmp = new Bitmap(32, 32);
@@ -127,73 +275,7 @@ class TrayApp : ApplicationContext
             }
         }
         var hicon = bmp.GetHicon();
-        var icon = Icon.FromHandle(hicon);
-        // keep bitmap alive by not disposing? Icon.FromHandle doesn't own; leak acceptable for tray updates
-        return icon;
-    }
-
-    private void ShowSummary()
-    {
-        if (summary == null || summary.IsDisposed)
-        {
-            summary = new SummaryForm(this);
-            summary.Show();
-        }
-        else
-        {
-            summary.RefreshData();
-            summary.Activate();
-        }
-    }
-
-    public Dictionary<Guid, List<string>> CollectWindows()
-    {
-        var desktops = GetDesktops();
-        var result = new Dictionary<Guid, List<string>>();
-        foreach (var d in desktops) result[d] = new List<string>();
-
-        EnumWindows((hWnd, _) =>
-        {
-            try
-            {
-                if (!IsWindowVisible(hWnd)) return true;
-                if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero) return true;
-                int len = GetWindowTextLength(hWnd);
-                if (len <= 0) return true;
-                var sb = new StringBuilder(len + 1);
-                GetWindowText(hWnd, sb, sb.Capacity);
-                string title = sb.ToString();
-                if (string.IsNullOrWhiteSpace(title)) return true;
-
-                Guid id;
-                int hr = Vdm.GetWindowDesktopId(hWnd, out id);
-                if (hr != 0) return true;
-                if (!result.ContainsKey(id)) result[id] = new List<string>();
-                result[id].Add(title);
-            }
-            catch { }
-            return true;
-        }, IntPtr.Zero);
-
-        return result;
-    }
-
-    public List<Guid> Desktops { get { return GetDesktops(); } }
-    public Guid CurrentDesktopGuid
-    {
-        get
-        {
-            try
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops"))
-                {
-                    var cur = (byte[])key.GetValue("CurrentVirtualDesktop");
-                    if (cur != null) return new Guid(cur);
-                }
-            }
-            catch { }
-            return Guid.Empty;
-        }
+        return Icon.FromHandle(hicon);
     }
 
     protected override void ExitThreadCore()
@@ -202,70 +284,6 @@ class TrayApp : ApplicationContext
         tray.Visible = false;
         tray.Dispose();
         base.ExitThreadCore();
-    }
-}
-
-class SummaryForm : Form
-{
-    private readonly TrayApp app;
-    private TextBox box;
-
-    public SummaryForm(TrayApp app)
-    {
-        this.app = app;
-        Text = "Desktops Summary";
-        Width = 520;
-        Height = 420;
-        StartPosition = FormStartPosition.CenterScreen;
-        TopMost = true;
-
-        box = new TextBox
-        {
-            Multiline = true,
-            ReadOnly = true,
-            ScrollBars = ScrollBars.Vertical,
-            Dock = DockStyle.Fill,
-            Font = new Font("Consolas", 10f)
-        };
-        var btn = new Button { Text = "Refresh", Dock = DockStyle.Bottom, Height = 30 };
-        btn.Click += (s, e) => RefreshData();
-        Controls.Add(box);
-        Controls.Add(btn);
-        RefreshData();
-    }
-
-    public void RefreshData()
-    {
-        var desktops = app.Desktops;
-        var windows = app.CollectWindows();
-        var cur = app.CurrentDesktopGuid;
-        var sb = new StringBuilder();
-        for (int i = 0; i < desktops.Count; i++)
-        {
-            var d = desktops[i];
-            string mark = d == cur ? "  <-- current" : "";
-            sb.AppendLine("Desktop " + (i + 1).ToString() + mark);
-            List<string> wins;
-            if (windows.TryGetValue(d, out wins) && wins.Count > 0)
-            {
-                foreach (var w in wins.OrderBy(x => x))
-                    sb.AppendLine("   - " + w);
-            }
-            else
-            {
-                sb.AppendLine("   (no windows)");
-            }
-            sb.AppendLine();
-        }
-        foreach (var kv in windows)
-        {
-            if (desktops.Contains(kv.Key)) continue;
-            string label = kv.Key == Guid.Empty ? "All desktops (pinned/system)" : "Unknown desktop";
-            sb.AppendLine(label);
-            foreach (var w in kv.Value.OrderBy(x => x)) sb.AppendLine("   - " + w);
-            sb.AppendLine();
-        }
-        box.Text = sb.ToString();
     }
 }
 
