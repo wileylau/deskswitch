@@ -39,6 +39,7 @@ class TrayApp : ApplicationContext
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     private const uint GW_OWNER = 4;
 
@@ -89,7 +90,9 @@ class TrayApp : ApplicationContext
     {
         public Guid Id;
         public IntPtr TopWindow;
+        public string TopProcess = "";
         public List<string> Titles = new List<string>();
+        public List<string> Processes = new List<string>();
     }
 
     public class DesktopRowData
@@ -140,8 +143,19 @@ class TrayApp : ApplicationContext
             foreach (var di in currentInfos) if (di.Id == d) { info = di; break; }
 
             string name = GetDesktopName(d, i);
-            string topTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
+            string rawTitle = (info != null && info.TopWindow != IntPtr.Zero && info.Titles.Count > 0)
                 ? info.Titles[0] : "(empty)";
+            bool tooLong = rawTitle.Length > 40;
+            if (!tooLong && info != null)
+            {
+                foreach (var t in info.Titles)
+                {
+                    if (t.Length > 40) { tooLong = true; break; }
+                }
+            }
+            string topTitle = rawTitle;
+            if (tooLong && info != null && info.Processes.Count > 0)
+                topTitle = string.Join(", ", info.Processes.ToArray());
             if (topTitle.Length > 55) topTitle = topTitle.Substring(0, 52) + "...";
             if (name.Length > 28) name = name.Substring(0, 25) + "...";
 
@@ -415,8 +429,36 @@ class TrayApp : ApplicationContext
                 if (hr != 0) return true;
                 if (!result.ContainsKey(id)) result[id] = new DesktopInfo { Id = id };
                 var info = result[id];
-                if (info.TopWindow == IntPtr.Zero) info.TopWindow = hWnd;
+                if (info.TopWindow == IntPtr.Zero)
+                {
+                    info.TopWindow = hWnd;
+                    try
+                    {
+                        uint pid;
+                        GetWindowThreadProcessId(hWnd, out pid);
+                        if (pid != 0)
+                        {
+                            using (var p = Process.GetProcessById((int)pid))
+                                info.TopProcess = p.ProcessName;
+                        }
+                    }
+                    catch { }
+                }
                 info.Titles.Add(title);
+
+                try
+                {
+                    uint pid2;
+                    GetWindowThreadProcessId(hWnd, out pid2);
+                    if (pid2 != 0)
+                    {
+                        string pname = null;
+                        try { using (var p = Process.GetProcessById((int)pid2)) pname = p.ProcessName; } catch { }
+                        if (!string.IsNullOrWhiteSpace(pname) && !info.Processes.Contains(pname))
+                            info.Processes.Add(pname);
+                    }
+                }
+                catch { }
             }
             catch { }
             return true;
