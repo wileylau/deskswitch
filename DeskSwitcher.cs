@@ -452,42 +452,66 @@ class TrayApp : ApplicationContext
 
     private Icon MakeIcon(string text)
     {
-        const int size = 32;
-        var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(bmp))
+        string fontName = "Segoe UI";
+        foreach (var f in FontFamily.Families)
         {
-            g.Clear(Color.Transparent);
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            if (f.Name == "Segoe UI Variable Display") { fontName = f.Name; break; }
+            if (f.Name == "Segoe UI Variable Text" && fontName == "Segoe UI") fontName = f.Name;
+        }
 
-            string fontName = "Segoe UI";
-            foreach (var f in FontFamily.Families)
+        int[] sizes = new int[] { 16, 20, 24, 32, 48 };
+        var images = new List<byte[]>();
+
+        foreach (int size in sizes)
+        {
+            using (var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            using (var g = Graphics.FromImage(bmp))
             {
-                if (f.Name == "Segoe UI Variable Display") { fontName = f.Name; break; }
-                if (f.Name == "Segoe UI Variable Text" && fontName == "Segoe UI") fontName = f.Name;
-            }
-            Font font = null;
-            for (float fs = 30f; fs >= 8f; fs -= 1f)
-            {
-                var f = new Font(fontName, fs, FontStyle.Bold, GraphicsUnit.Pixel);
-                var sz = g.MeasureString(text, f);
-                if (sz.Width <= size && sz.Height <= size)
+                g.Clear(Color.Transparent);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+                float fontSize = text.Length >= 3 ? size * 0.42f : (text.Length == 2 ? size * 0.55f : size * 0.72f);
+                using (var font = new Font(fontName, fontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var brush = new SolidBrush(Color.White))
                 {
-                    font = f;
-                    break;
+                    var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                    g.DrawString(text, font, brush, new RectangleF(0, 0, size, size), sf);
                 }
-                f.Dispose();
-            }
-            if (font == null) font = new Font(fontName, 8f, FontStyle.Regular, GraphicsUnit.Pixel);
-            using (font)
-            using (var brush = new SolidBrush(Color.White))
-            {
-                var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                g.DrawString(text, font, brush, new RectangleF(0, 0, size, size), sf);
+
+                using (var ms = new System.IO.MemoryStream())
+                {
+                    bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    images.Add(ms.ToArray());
+                }
             }
         }
-        var hicon = bmp.GetHicon();
-        return Icon.FromHandle(hicon);
+
+        using (var ms = new System.IO.MemoryStream())
+        using (var bw = new System.IO.BinaryWriter(ms))
+        {
+            bw.Write((ushort)0);
+            bw.Write((ushort)1);
+            bw.Write((ushort)images.Count);
+
+            int offset = 6 + 16 * images.Count;
+            for (int i = 0; i < images.Count; i++)
+            {
+                int s = sizes[i];
+                bw.Write((byte)(s >= 256 ? 0 : s));
+                bw.Write((byte)(s >= 256 ? 0 : s));
+                bw.Write((byte)0);
+                bw.Write((byte)0);
+                bw.Write((ushort)1);
+                bw.Write((ushort)32);
+                bw.Write((uint)images[i].Length);
+                bw.Write((uint)offset);
+                offset += images[i].Length;
+            }
+            foreach (var img in images) bw.Write(img);
+            ms.Position = 0;
+            return new Icon(ms);
+        }
     }
 
     private static GraphicsPath RoundedRect(Rectangle r, int radius)
